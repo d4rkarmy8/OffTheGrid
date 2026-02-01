@@ -1,0 +1,68 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "OffGridMessage",
+    "type": "object",
+    "required": [
+        "id",
+        "from",
+        "to",
+        "timestamp",
+        "content",
+        "content_type"
+    ],
+    "properties": {
+        "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique message identifier for deduplication"
+        },
+        "from": {
+            "type": "string",
+            "description": "Sender user ID"
+        },
+        "to": {
+            "type": "string",
+            "description": "Recipient user ID"
+        },
+        "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 timestamp when message was created"
+        },
+        "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 280,
+            "description": "Message body"
+        },
+        "content_type": {
+            "type": "string",
+            "enum": [
+                "text",
+                "image",
+                "file"
+            ],
+            "description": "Type of content being sent"
+        },
+        "transport": {
+            "type": "string",
+            "enum": [
+                "internet",
+                "bluetooth"
+            ],
+            "default": "internet",
+            "description": "How the message was transported"
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "sent",
+                "delivered",
+                "read"
+            ],
+            "default": "sent",
+            "description": "Delivery status"
+        }
+    },
+    "additionalProperties": false
+}
