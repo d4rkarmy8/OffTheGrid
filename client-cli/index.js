@@ -12,7 +12,7 @@ async function main() {
     console.log(chalk.blue.bold('Welcome to OffTheGrid CLI Chat!'));
 
     try {
-        socketProvider.connect(SERVER_URL);
+        await socketProvider.connect(SERVER_URL);
         console.log(chalk.gray('Connected to socket server...'));
 
         socketProvider.socket.on('error', (err) => {
@@ -20,7 +20,7 @@ async function main() {
         });
 
     } catch (error) {
-        console.error(chalk.red('Failed to connect:', error));
+        console.error(chalk.red('Failed to connect:', error.message));
         return;
     }
 
@@ -28,55 +28,74 @@ async function main() {
 }
 
 async function authFlow() {
-    const { action } = await inquirer.prompt([{
-        type: 'list',
-        name: 'action',
-        message: 'Welcome! Please select an option:',
-        choices: [
-            '1. Login',
-            '2. Register',
-            '3. Exit'
-        ]
-    }]);
+    try {
+        const { action } = await inquirer.prompt([{
+            type: 'list',
+            name: 'action',
+            message: 'Please select an option (Select 1 for Login, 2 for Register):',
+            choices: [
+                '1. Login',
+                '2. Register',
+                '3. Exit'
+            ]
+        }]);
 
-    if (action.includes('Exit')) {
-        console.log(chalk.blue('Goodbye!'));
-        process.exit(0);
-    }
-
-    const credentials = await inquirer.prompt([
-        { type: 'input', name: 'username', message: 'Username:' },
-        { type: 'input', name: 'password', message: 'Password:' }
-    ]);
-
-    const { username, password } = credentials;
-
-    if (action.includes('Register')) {
-        console.log(chalk.gray('Registering...'));
-        socketProvider.socket.emit('register', { username, password });
-
-        const result = await waitForAuth('register_success');
-        if (result.success) {
-            console.log(chalk.green('✔ Registration successful! Please login.'));
-            await authFlow();
-        } else {
-            console.error(chalk.red(`✘ Registration failed: ${result.message}`));
-            await authFlow();
+        if (action.includes('Exit') || action.startsWith('3')) {
+            console.log(chalk.blue('Goodbye!'));
+            process.exit(0);
         }
 
-    } else if (action.includes('Login')) {
-        console.log(chalk.gray('Logging in...'));
-        socketProvider.socket.emit('login', { username, password });
+        const credentials = await inquirer.prompt([
+            { type: 'input', name: 'username', message: 'Username:' },
+            { type: 'input', name: 'password', message: 'Password:' }
+        ]);
 
-        const result = await waitForAuth('login_success');
-        if (result.success) {
-            currentUser = result.data.username;
-            console.log(chalk.green(`✔ Logged in as ${chalk.bold(currentUser)}`));
-            await mainMenu();
-        } else {
-            console.error(chalk.red(`✘ Login failed: ${result.message}`));
-            await authFlow();
+        const { username, password } = credentials;
+
+        if (action.includes('Register') || action.startsWith('2')) {
+            console.log(chalk.gray('Registering...'));
+            socketProvider.socket.emit('register', { username, password });
+
+            const result = await waitForAuth('register_success');
+            if (result.success) {
+                console.log(chalk.green('✔ Registration successful! Logging in...'));
+                // Auto-login after registration
+                socketProvider.socket.emit('login', { username, password });
+                const loginResult = await waitForAuth('login_success');
+                if (loginResult.success) {
+                    currentUser = loginResult.data.username;
+                    console.log(chalk.green(`✔ Logged in as ${chalk.bold(currentUser)}`));
+                    console.log(chalk.gray('Proceeding to chat setup...'));
+                    await chatSetupFlow();
+                } else {
+                    console.error(chalk.red('Login after registration failed. Please try manually.'));
+                    console.error(chalk.red(`Error: ${loginResult.message}`));
+                    await authFlow();
+                }
+            } else {
+                console.error(chalk.red(`✘ Registration failed: ${result.message}`));
+                await authFlow();
+            }
+
+        } else if (action.includes('Login') || action.startsWith('1')) {
+            console.log(chalk.gray('Logging in...'));
+            socketProvider.socket.emit('login', { username, password });
+
+            const result = await waitForAuth('login_success');
+            if (result.success) {
+                currentUser = result.data.username;
+                console.log(chalk.green(`✔ Logged in as ${chalk.bold(currentUser)}`));
+                console.log(chalk.gray('Proceeding to chat setup...'));
+                await chatSetupFlow(); // Directly to chat
+            } else {
+                console.error(chalk.red(`✘ Login failed: ${result.message}`));
+                await authFlow();
+            }
         }
+    } catch (error) {
+        console.error(chalk.red('[ERROR] Unhandled error in authFlow:'), error);
+        console.error(chalk.red('Stack:'), error.stack);
+        process.exit(1);
     }
 }
 
