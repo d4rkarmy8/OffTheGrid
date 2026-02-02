@@ -1,72 +1,83 @@
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const db = require('../config/db');
 const messageSchema = require('../schemas/message.schema.json');
 
 const ajv = new Ajv();
 addFormats(ajv);
 const validate = ajv.compile(messageSchema);
 
-// In-memory user storage: username -> { passwordHash, socketId }
-const users = new Map();
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
 // Map to track connected users: username -> socketId
 const userSockets = new Map();
 
 const socketHandler = (io) => {
+    // Middleware for JWT verification
+    io.use((socket, next) => {
+        const token = socket.handshake.auth.token;
+        if (token) {
+            jwt.verify(token, JWT_SECRET, (err, decoded) => {
+                if (err) return next(new Error('Authentication error'));
+                socket.user = decoded; // { id, username }
+                next();
+            });
+        } else {
+            next(); // Allow connection for login/register
+        }
+    });
+
     io.on('connection', (socket) => {
         console.log(`User connected: ${socket.id}`);
 
+        if (socket.user) {
+            console.log(`User authenticated as: ${socket.user.username}`);
+            userSockets.set(socket.user.username, socket.id);
+        }
+
         // REGISTER
         socket.on('register', async ({ username, password }) => {
-            console.log(`[REGISTER] Received registration request for: ${username}`);
             try {
-                // Check if user already exists
-                if (users.has(username)) {
-                    console.log(`[REGISTER] Username already taken: ${username}`);
-                    return socket.emit('error', { message: 'Username already taken' });
-                }
-
-                // Hash password and store user
                 const hashedPassword = await bcrypt.hash(password, 10);
-                users.set(username, { passwordHash: hashedPassword });
-
-                console.log(`[REGISTER] User registered successfully: ${username}`);
-                socket.emit('register_success', { username });
+                const result = await db.query(
+                    'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id',
+                    [username, hashedPassword]
+                );
+                socket.emit('register_success', { userId: result.rows[0].id });
             } catch (err) {
-                console.error("[REGISTER] Error:", err.message);
-                socket.emit('error', { message: 'Registration failed' });
+                console.error("Register Error:", err.message);
+                socket.emit('error', { message: 'Registration failed (Username might be taken)' });
             }
         });
 
         // LOGIN
         socket.on('login', async ({ username, password }) => {
-            console.log(`[LOGIN] Received login request for: ${username}`);
-            console.log(`[LOGIN] Current registered users:`, Array.from(users.keys()));
             try {
-                // Check if user exists
-                const user = users.get(username);
-                if (!user) {
-                    console.log(`[LOGIN] User not found: ${username}`);
+                const result = await db.query('SELECT * FROM users WHERE username = $1', [username]);
+                if (result.rows.length === 0) {
                     return socket.emit('error', { message: 'User not found' });
                 }
 
-                // Verify password
-                const match = await bcrypt.compare(password, user.passwordHash);
+                const user = result.rows[0];
+                const match = await bcrypt.compare(password, user.password_hash);
+
                 if (!match) {
-                    console.log(`[LOGIN] Invalid password for: ${username}`);
                     return socket.emit('error', { message: 'Invalid password' });
                 }
 
-                // Update socket state
-                socket.user = { username };
-                userSockets.set(username, socket.id);
+                const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '1h' });
 
-                console.log(`[LOGIN] User ${username} logged in successfully and mapped to ${socket.id}`);
-                socket.emit('login_success', { username });
+                // Update socket state
+                socket.user = { id: user.id, username: user.username };
+                userSockets.set(user.username, socket.id);
+
+                socket.emit('login_success', { token, username: user.username });
+                console.log(`User ${user.username} logged in and mapped to ${socket.id}`);
 
             } catch (err) {
-                console.error("[LOGIN] Error:", err.message);
+                console.error("Login Error:", err.message);
                 socket.emit('error', { message: 'Login failed' });
             }
         });

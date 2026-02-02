@@ -6,24 +6,14 @@
 
 OffTheGrid is a resilient messaging application designed to function in challenged network environments. This implementation currently focuses on a **Socket.io-based Client-Server architecture** that enables real-time communication between CLI clients.
 
-## Features
+## Features implemented
 
-### Core Capabilities
 -   **Real-time Messaging**: Instant communication between connected clients using Socket.io.
 -   **CLI Interface**: A command-line interface built with `inquirer` and `chalk` for a user-friendly terminal experience.
+-   **User Identification**: Users are prompted to enter a username upon connection. Messages are broadcasted with the sender's identity (e.g., `[Alice]: Hello`).
 -   **Structured Messaging**: Messages are sent as structured objects `{ sender, text }` for better handling and display.
 -   **Automated Diagnostics**: The client sends hardcoded diagnostic messages on startup to verify connectivity.
-
-### New Enhancements
--   **In-Memory Authentication**: 
-    -   **No Database Required**: User registration and login work without PostgreSQL or any external database.
-    -   **Secure Password Storage**: Passwords are hashed using bcrypt before storing in memory.
-    -   **Session Management**: Users remain logged in for the duration of their socket connection.
-    -   **Simple Registration**: New users can register with just a username and password.
--   **Strict 1-1 Routing**: 
-    -   Privacy-first design. Messages are routed **server-side** exclusively to the intended recipient's socket ID.
-    -   No broadcasting: If User A sends a message to User C, User B never receives the data packet.
--   **Persistent Chat Sessions**: After login, users can access a main menu to start direct chats with other users.
+-   **ESM Support**: The client-cli is built using ECMAScript Modules (`import`/`export`) to support modern dependencies.
 
 ## Project Structure
 
@@ -34,6 +24,7 @@ OffTheGrid/
 │   │   ├── core/
 │   │   │   └── transport/
 │   │   │       ├── SocketProvider.js    # Wraps socket.io-client logic
+│   │   │       ├── BluetoothProvider.js # Placeholder for future Bluetooth support
 │   │   │       └── TransportInterface.js
 │   │   └── ui/
 │   │       └── prompts/
@@ -43,8 +34,10 @@ OffTheGrid/
 │
 ├── server/                     # Central Signaling/Relay Server
 │   ├── src/
+│   │   ├── config/
+│   │   │   └── db.js
 │   │   ├── sockets/
-│   │   │   └── socketHandler.js # Server-side socket logic & routing
+│   │   │   └── socketHandler.js # Server-side socket logic & broadcasting
 │   │   └── index.js            # Server Entry Point (Express + Socket.io)
 │   └── package.json            # Server dependencies (express, socket.io, etc.)
 │
@@ -90,21 +83,18 @@ In a new terminal:
 cd client-cli
 node index.js
 ```
-*   You will be prompted to **Login** or **Register**.
-*   For new users, select **Register** and enter a username and password.
-*   For existing users, select **Login** and enter your credentials.
-*   After successful login, enter the username of the person you want to chat with.
-*   Type messages and hit Enter. Type "exit" to return to the main menu.
+*   You will be prompted to enter your **username**.
+*   Once connected, you can type messages and hit Enter to send.
+*   Incoming messages from other clients will appear automatically.
 
 #### 3. Start Additional Clients
-Open more terminals and repeat step 2 to simulate multiple users chatting with each other.
+Open more terminals and repeat step 2 to simulate multiple users (e.g., Alice, Bob) chatting with each other.
 
 ## Technical Details
 
 -   **Communication Protocol**: Socket.io (WebSocket with fallback).
--   **Server**: Node.js, Express, Socket.io.
+-   **Server**: Node.js with Express.
 -   **Client**: Node.js CLI using `inquirer` for input loops and `chalk` for styling.
--   **Authentication**: In-Memory (Map<Username, SocketID>). No persistence.
 -   **Module System**:
     -   Server: CommonJS (`require`).
     -   Client: ESM (`import`), configured via `"type": "module"` in `package.json`.
