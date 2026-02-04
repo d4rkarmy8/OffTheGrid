@@ -3,7 +3,7 @@ const addFormats = require('ajv-formats');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const messageSchema = require('../schemas/message.schema.json');
-const supabase= require('../config/supabase');
+const supabase = require('../config/supabase');
 const ajv = new Ajv();
 addFormats(ajv);
 const validate = ajv.compile(messageSchema);
@@ -12,6 +12,29 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
 // Map to track connected users: username -> socketId
 const userSockets = new Map();
+
+async function saveMessage(data) {
+    try {
+        await supabase.from('messages').insert([{
+            id: data.id,
+            sender_username: data.from,
+            recipient_username: data.to,
+            content: data.content,
+            status: data.status || 'sent',
+            timestamp: data.timestamp
+        }]);
+    } catch (err) {
+        console.error("DB Save Error:", err.message);
+    }
+}
+
+async function updateMessageStatus(id, status) {
+    try {
+        await supabase.from('messages').update({ status }).eq('id', id);
+    } catch (err) {
+        console.error("DB Update Error:", err.message);
+    }
+}
 
 const socketHandler = (io) => {
     // Middleware for JWT verification
@@ -32,15 +55,18 @@ const socketHandler = (io) => {
         console.log(`User connected: ${socket.id}`);
 
         if (socket.user) {
-            console.log(`User authenticated as: ${socket.user.username}`);
-            userSockets.set(socket.user.username, socket.id);
+            const username = socket.user.username.trim().toLowerCase();
+            console.log(`[Auth] User ${username} authenticated on socket ${socket.id}`);
+            userSockets.set(username, socket.id);
+            // Broadcast status
+            io.emit('user_status', { username: socket.user.username, status: 'online' });
         }
 
         // REGISTER
         socket.on('register', async ({ username, password }) => {
             try {
                 const hashedPassword = await bcrypt.hash(password, 10);
-                const {data,error} = await supabase.from('users').insert([{
+                const { data, error } = await supabase.from('users').insert([{
                     username,
                     password_hash: hashedPassword
                 }]).select().single();
@@ -57,8 +83,8 @@ const socketHandler = (io) => {
         // LOGIN
         socket.on('login', async ({ username, password }) => {
             try {
-                const {data,error} = await supabase.from('users').select('*').eq('username', username);
-                if (data.length === 0|| error) {
+                const { data, error } = await supabase.from('users').select('*').eq('username', username);
+                if (data.length === 0 || error) {
                     return socket.emit('error', { message: 'User not found' });
                 }
 
@@ -73,10 +99,15 @@ const socketHandler = (io) => {
 
                 // Update socket state
                 socket.user = { id: user.id, username: user.username };
-                userSockets.set(user.username, socket.id);
+                const normalizedUsername = user.username.trim().toLowerCase();
+                userSockets.set(normalizedUsername, socket.id);
 
                 socket.emit('login_success', { token, username: user.username });
-                console.log(`User ${user.username} logged in and mapped to ${socket.id}`);
+                // Broadcast status
+                io.emit('user_status', { username: user.username, status: 'online' });
+
+                console.log(`[Login] User ${user.username} logged in and mapped to ${socket.id}`);
+                console.log(`[Status] Currently online: ${Array.from(userSockets.keys()).join(', ')}`);
 
             } catch (err) {
                 console.error("Login Error:", err.message);
@@ -96,33 +127,125 @@ const socketHandler = (io) => {
             }
 
             if (data.from !== socket.user.username) {
-                return socket.emit('error', { message: 'Sender mismatch spoofing detected' });
+                console.warn(`Blocked spoofing attempt: ${socket.id} tried to send as ${data.from}`);
+                data.from = socket.user.username; // Force correct sender
             }
 
-            const recipientUsername = data.to;
+            const recipientUsername = data.to ? data.to.trim().toLowerCase() : null;
 
             if (!recipientUsername) {
                 return socket.emit('error', { message: 'Recipient "to" field is required' });
             }
 
-            console.log(`Direct Message from ${data.from} to ${recipientUsername}`);
+            console.log(`[Message] Direct Message from ${data.from} to ${recipientUsername}`);
+
+            // Save to DB
+            saveMessage(data);
 
             const recipientSocketId = userSockets.get(recipientUsername);
 
             if (recipientSocketId) {
+                console.log(`[Routing] Delivering to socket: ${recipientSocketId}`);
                 io.to(recipientSocketId).emit('message', data);
+                updateMessageStatus(data.id, 'delivered');
             } else {
-                console.log(`User ${recipientUsername} is offline.`);
-                socket.emit('notification', `User ${recipientUsername} is offline.`);
+                console.log(`[Routing] User "${recipientUsername}" is offline. Map contains: [${Array.from(userSockets.keys()).join(', ')}]`);
+                socket.emit('notification', `User ${data.to} is offline.`);
+                // Send explicit status update to sender if not found in map
+                socket.emit('user_status', { username: data.to, status: 'offline' });
+            }
+        });
+
+        // GET INBOX
+        socket.on('get_inbox', async () => {
+            if (!socket.user) return;
+            try {
+                const currentUser = socket.user.username;
+
+                // Get all messages involving this user
+                const { data: allMessages, error } = await supabase
+                    .from('messages')
+                    .select('sender_username, recipient_username, content, timestamp, status')
+                    .or(`sender_username.eq.${currentUser},recipient_username.eq.${currentUser}`)
+                    .order('timestamp', { ascending: false });
+
+                if (error) throw error;
+
+                // Process messages to create inbox
+                const conversations = {};
+
+                allMessages.forEach(msg => {
+                    const contact = msg.sender_username === currentUser
+                        ? msg.recipient_username
+                        : msg.sender_username;
+
+                    if (!conversations[contact]) {
+                        conversations[contact] = {
+                            contact: contact,
+                            last_message_preview: msg.content,
+                            last_timestamp: msg.timestamp,
+                            unread_count: 0
+                        };
+                    }
+
+                    // Count unread (messages sent TO current user that aren't read)
+                    if (msg.recipient_username === currentUser &&
+                        msg.status !== 'read') {
+                        conversations[contact].unread_count++;
+                    }
+                });
+
+                const inboxData = Object.values(conversations)
+                    .sort((a, b) => new Date(b.last_timestamp) - new Date(a.last_timestamp));
+
+                console.log(`[Inbox] Returning ${inboxData.length} conversations for ${currentUser}`);
+                socket.emit('inbox_data', inboxData);
+            } catch (err) {
+                console.error("Inbox Error:", err.message);
+                socket.emit('error', { message: 'Failed to fetch inbox' });
+            }
+        });
+
+        // GET CHAT HISTORY
+        socket.on('get_chat_history', async ({ contact }) => {
+            if (!socket.user) return;
+            try {
+                const { data, error } = await supabase
+                    .from('messages')
+                    .select('*')
+                    .or(`and(sender_username.eq.${socket.user.username},recipient_username.eq.${contact}),and(sender_username.eq.${contact},recipient_username.eq.${socket.user.username})`)
+                    .order('timestamp', { ascending: true })
+                    .limit(50);
+
+                if (error) throw error;
+                socket.emit('chat_history', { contact, messages: data });
+
+                // Mark messages as read
+                await supabase
+                    .from('messages')
+                    .update({ status: 'read' })
+                    .eq('recipient_username', socket.user.username)
+                    .eq('sender_username', contact)
+                    .eq('status', 'pending');
+
+            } catch (err) {
+                console.error("History Error:", err.message);
+                socket.emit('error', { message: 'Failed to fetch history' });
             }
         });
 
         socket.on('disconnect', () => {
             if (socket.user) {
-                console.log(`User disconnected: ${socket.user.username}`);
-                userSockets.delete(socket.user.username);
+                const username = socket.user.username.trim().toLowerCase();
+                console.log(`[Disconnect] User ${username} left (${socket.id})`);
+                // Only delete if this is the active socket for this username
+                if (userSockets.get(username) === socket.id) {
+                    userSockets.delete(username);
+                    // Broadcast status
+                    io.emit('user_status', { username: socket.user.username, status: 'offline' });
+                }
             } else {
-                console.log(`User disconnected: ${socket.id}`);
+                console.log(`[Disconnect] Guest left (${socket.id})`);
             }
         });
     });

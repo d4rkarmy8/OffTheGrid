@@ -5,8 +5,10 @@ class SocketProvider {
         this.socket = null;
     }
 
-    connect(url) {
-        this.socket = io(url);
+    connect(url, token = null) {
+        this.socket = io(url, {
+            auth: { token }
+        });
 
         this.socket.on("connect", () => {
             // Connection logic handled in main index
@@ -15,6 +17,12 @@ class SocketProvider {
         this.socket.on("connect_error", (err) => {
             console.error("Connection error:", err.message);
         });
+    }
+
+    setAuth(token) {
+        if (this.socket) {
+            this.socket.auth = { token };
+        }
     }
 
     send(message) {
