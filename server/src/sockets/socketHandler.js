@@ -206,6 +206,42 @@ const socketHandler = (io) => {
             }
         });
 
+        // GET ALL USERS STATUS
+        socket.on('get_all_users_status', async () => {
+            if (!socket.user) return;
+            try {
+                const currentUser = socket.user.username.trim().toLowerCase();
+                const { data: users, error } = await supabase
+                    .from('users')
+                    .select('username');
+
+                if (error) throw error;
+
+                const statusList = users
+                    .filter(u => u.username && u.username.trim().toLowerCase() !== currentUser)
+                    .map(u => ({
+                        username: u.username,
+                        status: userSockets.has(u.username.trim().toLowerCase()) ? 'online' : 'offline'
+                    }));
+
+                socket.emit('all_users_status_data', statusList);
+            } catch (err) {
+                console.error("Users Status Error:", err.message);
+                socket.emit('error', { message: 'Failed to fetch users status' });
+            }
+        });
+
+        // GET ONLINE USERS
+        socket.on('get_online_users', () => {
+            if (!socket.user) return;
+            const currentUser = socket.user.username.trim().toLowerCase();
+            const onlineUsers = Array.from(userSockets.keys())
+                .filter(u => u !== currentUser);
+
+            console.log(`[OnlineUsers] Requester: ${currentUser}, AllOnline: [${Array.from(userSockets.keys()).join(', ')}], Returning: [${onlineUsers.join(', ')}]`);
+            socket.emit('online_users_data', onlineUsers);
+        });
+
         // GET CHAT HISTORY
         socket.on('get_chat_history', async ({ contact }) => {
             if (!socket.user) return;

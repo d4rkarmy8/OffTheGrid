@@ -184,41 +184,55 @@ async function chatSetupFlow() {
 }
 
 async function inboxMenu() {
-    console.log(chalk.blue.bold('\n--- Your Inbox ---'));
-    socketProvider.socket.emit('get_inbox');
+    console.log(chalk.blue.bold('\n--- Registered Users & Online Status ---'));
 
-    const inboxData = await new Promise(resolve => {
-        socketProvider.socket.once('inbox_data', resolve);
-        setTimeout(() => resolve([]), 3000);
+    const userStatusPromise = new Promise(resolve => {
+        const timer = setTimeout(() => {
+            socketProvider.socket.off('all_users_status_data', handler);
+            resolve([]);
+        }, 3000);
+        const handler = (data) => {
+            clearTimeout(timer);
+            resolve(data || []);
+        };
+        socketProvider.socket.once('all_users_status_data', handler);
     });
 
-    console.log(chalk.gray(`[Debug] Received:`, JSON.stringify(inboxData, null, 2)));
+    socketProvider.socket.emit('get_all_users_status');
 
-    if (!inboxData || inboxData.length === 0) {
-        console.log(chalk.gray('Inbox is empty.'));
+    const usersStatus = await userStatusPromise;
+
+    if (!Array.isArray(usersStatus) || usersStatus.length === 0) {
+        console.log(chalk.yellow('\nNo other users are currently registered in the system.'));
         await mainMenu();
         return;
     }
 
-    const choices = inboxData.map((conv, idx) => {
-        const contact = conv.contact || conv.chat_partner || 'Unknown';
-        const unread = conv.unread_count || 0;
-        const unreadText = unread > 0 ? chalk.red(`(${unread} unread)`) : chalk.gray('(0 unread)');
+    // Sort: Online users first, then alphabetically
+    const sortedUsers = [...usersStatus].sort((a, b) => {
+        if (a.status === 'online' && b.status !== 'online') return -1;
+        if (a.status !== 'online' && b.status === 'online') return 1;
+        return (a.username || '').localeCompare(b.username || '');
+    });
 
-        console.log(chalk.gray(`[Debug] Processing: contact="${contact}", unread=${unread}`));
+    const choices = sortedUsers.map((user) => {
+        const isOnline = user.status === 'online';
+        // USE PLAIN TEXT for names to avoid rendering issues
+        const label = isOnline ? `(ONLINE) ${user.username}` : `(OFFLINE) ${user.username}`;
 
         return {
-            name: `${contact} ${unreadText}`,
-            value: contact
+            name: label,
+            value: user.username
         };
     });
-    choices.push({ name: chalk.yellow('← Back'), value: 'back' });
+
+    choices.push({ name: '← Back to Main Menu', value: 'back' });
 
     const { selectedContact } = await inquirer.prompt([{
-        type: 'list',
+        type: 'rawlist', // More robust for varied Windows terminals
         name: 'selectedContact',
-        message: 'Select a conversation:',
-        choices
+        message: 'Select a user to chat with (Enter number):',
+        choices: choices
     }]);
 
     if (selectedContact === 'back') {
