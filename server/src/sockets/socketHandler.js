@@ -13,6 +13,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 // Map to track connected users: username -> socketId
 const userSockets = new Map();
 
+//  ADDED EDGE CASE: Track last message time per user (basic rate limiting)
+const lastMessageTime = new Map();
+
 async function saveMessage(data) {
     try {
         await supabase.from('messages').insert([{
@@ -75,7 +78,7 @@ const socketHandler = (io) => {
                 }
                 socket.emit('register_success', { userId: data.id });
             } catch (err) {
-                console.error("Register Error:", err.message);
+                console.error(`[Register Error] ${err.message}`);
                 socket.emit('error', { message: 'Registration failed (Username might be taken)' });
             }
         });
@@ -110,13 +113,13 @@ const socketHandler = (io) => {
                 console.log(`[Status] Currently online: ${Array.from(userSockets.keys()).join(', ')}`);
 
             } catch (err) {
-                console.error("Login Error:", err.message);
+                console.error(`[Login Error] ${err.message}`);
                 socket.emit('error', { message: 'Login failed' });
             }
         });
 
         // MESSAGE (Direct Routing)
-        socket.on('message', (data) => {
+        socket.on('message', async (data) => {
             if (!socket.user) return socket.emit('error', { message: 'Unauthorized' });
 
             const valid = validate(data);
@@ -127,17 +130,50 @@ const socketHandler = (io) => {
             }
 
             if (data.from !== socket.user.username) {
-                console.warn(`Blocked spoofing attempt: ${socket.id} tried to send as ${data.from}`);
+                console.warn(`[Security] Blocked spoofing attempt: ${socket.id} tried to send as ${data.from}`);
                 data.from = socket.user.username; // Force correct sender
             }
 
+            const sender = data.from.trim().toLowerCase();
             const recipientUsername = data.to ? data.to.trim().toLowerCase() : null;
 
             if (!recipientUsername) {
                 return socket.emit('error', { message: 'Recipient "to" field is required' });
             }
 
+            //  ADDED EDGE CASE: Prevent self-messaging
+            if (sender === recipientUsername) {
+                return socket.emit('error', { message: 'You cannot message yourself' });
+            }
+
+            //  ADDED EDGE CASE: Prevent empty / whitespace-only messages
+            if (!data.content || data.content.trim().length === 0) {
+                return socket.emit('error', { message: 'Message cannot be empty' });
+            }
+
+            //  ADDED EDGE CASE: Limit message length
+            if (data.content.length > 1000) {
+                return socket.emit('error', { message: 'Message is too long' });
+            }
+
+            //  ADDED EDGE CASE: Basic rate limiting (anti-spam)
+            const now = Date.now();
+            const lastTime = lastMessageTime.get(sender) || 0;
+            if (now - lastTime < 500) {
+                return socket.emit('error', { message: 'You are sending messages too fast' });
+            }
+            lastMessageTime.set(sender, now);
+
             console.log(`[Message] Direct Message from ${data.from} to ${recipientUsername}`);
+
+            //  ADDED EDGE CASE: Prevent duplicate message IDs
+            const { data: existing } = await supabase
+                .from('messages')
+                .select('id')
+                .eq('id', data.id)
+                .single();
+
+            if (existing) return;
 
             // Save to DB
             saveMessage(data);
