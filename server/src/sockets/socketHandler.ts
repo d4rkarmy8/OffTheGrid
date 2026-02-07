@@ -1,9 +1,9 @@
-const Ajv = require('ajv');
-const addFormats = require('ajv-formats');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const messageSchema = require('../schemas/message.schema.json');
-const supabase = require('../config/supabase');
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import messageSchema from '../schemas/message.schema.json' with { type: 'json' };
+import supabase from '../config/supabase';
 const ajv = new Ajv();
 addFormats(ajv);
 const validate = ajv.compile(messageSchema);
@@ -16,7 +16,7 @@ const userSockets = new Map();
 //  ADDED EDGE CASE: Track last message time per user (basic rate limiting)
 const lastMessageTime = new Map();
 
-async function saveMessage(data) {
+async function saveMessage(data:{ id: string; from: string; to: string; content: string; status?: string; timestamp: string }) {
     try {
         await supabase.from('messages').insert([{
             id: data.id,
@@ -26,25 +26,25 @@ async function saveMessage(data) {
             status: data.status || 'sent',
             timestamp: data.timestamp
         }]);
-    } catch (err) {
+    } catch (err: any) {
         console.error("DB Save Error:", err.message);
     }
 }
 
-async function updateMessageStatus(id, status) {
+async function updateMessageStatus(id: string, status: string) {
     try {
         await supabase.from('messages').update({ status }).eq('id', id);
-    } catch (err) {
+    } catch (err: any) {
         console.error("DB Update Error:", err.message);
     }
 }
 
-const socketHandler = (io) => {
+const socketHandler = (io: any) => {
     // Middleware for JWT verification
-    io.use((socket, next) => {
+    io.use((socket: any, next: (err?: any) => void) => {
         const token = socket.handshake.auth.token;
         if (token) {
-            jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
                 if (err) return next(new Error('Authentication error'));
                 socket.user = decoded; // { id, username }
                 next();
@@ -54,7 +54,7 @@ const socketHandler = (io) => {
         }
     });
 
-    io.on('connection', (socket) => {
+    io.on('connection', (socket: any) => {
         console.log(`User connected: ${socket.id}`);
 
         if (socket.user) {
@@ -66,7 +66,7 @@ const socketHandler = (io) => {
         }
 
         // REGISTER
-        socket.on('register', async ({ username, password }) => {
+        socket.on('register', async ({ username, password }: { username: string; password: string }) => {
             try {
                 const hashedPassword = await bcrypt.hash(password, 10);
                 const { data, error } = await supabase.from('users').insert([{
@@ -77,17 +77,17 @@ const socketHandler = (io) => {
                     throw error;
                 }
                 socket.emit('register_success', { userId: data.id });
-            } catch (err) {
+            } catch (err: any) {
                 console.error(`[Register Error] ${err.message}`);
                 socket.emit('error', { message: 'Registration failed (Username might be taken)' });
             }
         });
 
         // LOGIN
-        socket.on('login', async ({ username, password }) => {
+        socket.on('login', async ({ username, password }: { username: string; password: string }) => {
             try {
                 const { data, error } = await supabase.from('users').select('*').eq('username', username);
-                if (data.length === 0 || error) {
+                if (!data || data.length === 0 || error) {
                     return socket.emit('error', { message: 'User not found' });
                 }
 
@@ -112,14 +112,14 @@ const socketHandler = (io) => {
                 console.log(`[Login] User ${user.username} logged in and mapped to ${socket.id}`);
                 console.log(`[Status] Currently online: ${Array.from(userSockets.keys()).join(', ')}`);
 
-            } catch (err) {
+            } catch (err: any) {
                 console.error(`[Login Error] ${err.message}`);
                 socket.emit('error', { message: 'Login failed' });
             }
         });
 
         // MESSAGE (Direct Routing)
-        socket.on('message', async (data) => {
+        socket.on('message', async (data: { id: string; from: string; to: string; content: string; status?: string; timestamp: string }) => {
             if (!socket.user) return socket.emit('error', { message: 'Unauthorized' });
 
             const valid = validate(data);
@@ -208,7 +208,7 @@ const socketHandler = (io) => {
                 if (error) throw error;
 
                 // Process messages to create inbox
-                const conversations = {};
+                const conversations: { [key: string]: { contact: string; last_message_preview: string; last_timestamp: string; unread_count: number } } = {};
 
                 allMessages.forEach(msg => {
                     const contact = msg.sender_username === currentUser
@@ -232,11 +232,11 @@ const socketHandler = (io) => {
                 });
 
                 const inboxData = Object.values(conversations)
-                    .sort((a, b) => new Date(b.last_timestamp) - new Date(a.last_timestamp));
+                    .sort((a, b) => new Date(b.last_timestamp).getTime() - new Date(a.last_timestamp).getTime());
 
                 console.log(`[Inbox] Returning ${inboxData.length} conversations for ${currentUser}`);
                 socket.emit('inbox_data', inboxData);
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Inbox Error:", err.message);
                 socket.emit('error', { message: 'Failed to fetch inbox' });
             }
@@ -261,7 +261,7 @@ const socketHandler = (io) => {
                     }));
 
                 socket.emit('all_users_status_data', statusList);
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Users Status Error:", err.message);
                 socket.emit('error', { message: 'Failed to fetch users status' });
             }
@@ -279,7 +279,7 @@ const socketHandler = (io) => {
         });
 
         // GET CHAT HISTORY
-        socket.on('get_chat_history', async ({ contact }) => {
+        socket.on('get_chat_history', async ({ contact }: { contact: string }) => {
             if (!socket.user) return;
             try {
                 const { data, error } = await supabase
@@ -300,7 +300,7 @@ const socketHandler = (io) => {
                     .eq('sender_username', contact)
                     .eq('status', 'pending');
 
-            } catch (err) {
+            } catch (err: any) {
                 console.error("History Error:", err.message);
                 socket.emit('error', { message: 'Failed to fetch history' });
             }
@@ -323,4 +323,4 @@ const socketHandler = (io) => {
     });
 };
 
-module.exports = socketHandler;
+export default socketHandler;

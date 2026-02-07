@@ -1,7 +1,7 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
-import socketProvider from './src/core/transport/SocketProvider.js';
+import socketProvider from './src/core/transport/SocketProvider.ts';
 import dotenv from 'dotenv';
 dotenv.config();
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
