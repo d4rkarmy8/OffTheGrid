@@ -2,6 +2,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import socketProvider from './src/core/transport/SocketProvider.ts';
+import { generateAndStoreKeys, loadStoredKeys } from './src/crypto/keyManager.ts';
 import dotenv from 'dotenv';
 dotenv.config();
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
@@ -9,6 +10,7 @@ let currentUser: string | null = null;
 let currentToken: string | null = null;
 // No room concept anymore, just direct chat context if needed or purely command based
 let currentRecipient: string | null = null;
+let currentKeys: any = null;
 
 async function main() {
     console.log(chalk.blue.bold('Welcome to OffTheGrid CLI Chat!'));
@@ -53,10 +55,23 @@ async function authFlow() {
 
     if (action.includes('2')) {
         console.log(chalk.gray('Registering...'));
-        socketProvider.socket!.emit('register', { username, password });
+        socketProvider.socket!.emit('register', { id: uuidv4(), username, password });
 
         const result = await waitForAuth('register_success');
         if (result.success) {
+            const userId = result.data?.userId;
+            try {
+                const { filePath, publicKeys } = await generateAndStoreKeys(username);
+                socketProvider.socket!.emit('upload_public_keys', {
+                    userId,
+                    username,
+                    ...publicKeys
+                });
+                console.log(chalk.green(`✔ Keys generated and saved to ${filePath}`));
+            } catch (err: any) {
+                console.error(chalk.red(`✘ Key generation failed: ${err.message || 'Unknown error'}`));
+            }
+
             console.log(chalk.green('✔ Registration successful! Please login.'));
             await authFlow();
         } else {
@@ -72,9 +87,25 @@ async function authFlow() {
         if (result.success) {
             currentUser = result.data.username;
             currentToken = result.data.token;
+            const userId = result.data.userId;
             // Update socket for future automatic re-authentications
             socketProvider.setAuth(currentToken);
             console.log(chalk.green(`✔ Logged in as ${chalk.bold(currentUser)}`));
+            try {
+                currentKeys = await loadStoredKeys(currentUser);
+                if (!currentKeys) {
+                    const { filePath, publicKeys } = await generateAndStoreKeys(currentUser);
+                    socketProvider.socket!.emit('upload_public_keys', {
+                        userId,
+                        username: currentUser,
+                        ...publicKeys
+                    });
+                    console.log(chalk.yellow(`⚠ No local keys found. New keys generated at ${filePath}`));
+                    currentKeys = await loadStoredKeys(currentUser);
+                }
+            } catch (err: any) {
+                console.error(chalk.red(`✘ Failed to load or generate local keys: ${err.message || 'Unknown error'}`));
+            }
             await mainMenu();
         } else {
             console.error(chalk.red(`✘ Login failed: ${result.message}`));

@@ -16,6 +16,9 @@ const userSockets = new Map();
 //  ADDED EDGE CASE: Track last message time per user (basic rate limiting)
 const lastMessageTime = new Map();
 
+// Map to track public keys in memory: username -> public keys
+const userPublicKeys = new Map();
+
 const socketHandler = (io: any) => {
     // Middleware for JWT verification
     io.use((socket: any, next: (err?: any) => void) => {
@@ -43,10 +46,11 @@ const socketHandler = (io: any) => {
         }
 
         // REGISTER
-        socket.on('register', async ({ username, password }: { username: string; password: string }) => {
+        socket.on('register', async ({ id, username, password }: { id: string; username: string; password: string }) => {
             try {
                 const hashedPassword = await bcrypt.hash(password, 10);
                 const { data, error } = await supabase.from('users').insert([{
+                    id,
                     username,
                     password_hash: hashedPassword
                 }]).select().single();
@@ -82,7 +86,7 @@ const socketHandler = (io: any) => {
                 const normalizedUsername = user.username.trim().toLowerCase();
                 userSockets.set(normalizedUsername, socket.id);
 
-                socket.emit('login_success', { token, username: user.username });
+                socket.emit('login_success', { token, username: user.username, userId: user.id });
                 // Broadcast status
                 io.emit('user_status', { username: user.username, status: 'online' });
 
@@ -92,6 +96,51 @@ const socketHandler = (io: any) => {
             } catch (err: any) {
                 console.error(`[Login Error] ${err.message}`);
                 socket.emit('error', { message: 'Login failed' });
+            }
+        });
+
+        // UPLOAD PUBLIC KEYS
+        socket.on('upload_public_keys', async (payload: { userId?: string; username?: string; signingPublicKey?: string; encryptionPublicKey?: string; format?: string }) => {
+            const username = (socket.user?.username || payload.username || '').trim().toLowerCase();
+            const userId = (socket.user?.id || payload.userId || '').trim();
+
+            if (!userId) {
+                return socket.emit('error', { message: 'User id is required to upload keys' });
+            }
+
+            if (!payload.signingPublicKey || !payload.encryptionPublicKey) {
+                return socket.emit('error', { message: 'Both signing and encryption public keys are required' });
+            }
+
+            try {
+                const format = payload.format || 'der-base64';
+                const { error } = await supabase
+                    .from('publickeys')
+                    .upsert({
+                        id: userId,
+                        public_sign_key: payload.signingPublicKey,
+                        public_encrypt_key: payload.encryptionPublicKey,
+                        format,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+
+                if (error) {
+                    throw error;
+                }
+
+                if (username) {
+                    userPublicKeys.set(username, {
+                        signingPublicKey: payload.signingPublicKey,
+                        encryptionPublicKey: payload.encryptionPublicKey,
+                        format,
+                        updatedAt: new Date().toISOString()
+                    });
+                }
+
+                socket.emit('public_keys_uploaded', { userId, username: username || null });
+            } catch (err: any) {
+                console.error('Public Key Upload Error:', err.message || err);
+                socket.emit('error', { message: 'Failed to upload public keys' });
             }
         });
 
