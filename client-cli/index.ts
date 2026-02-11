@@ -5,10 +5,10 @@ import socketProvider from './src/core/transport/SocketProvider.ts';
 import dotenv from 'dotenv';
 dotenv.config();
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
-let currentUser = null;
-let currentToken = null;
+let currentUser: string | null = null;
+let currentToken: string | null = null;
 // No room concept anymore, just direct chat context if needed or purely command based
-let currentRecipient = null;
+let currentRecipient: string | null = null;
 
 async function main() {
     console.log(chalk.blue.bold('Welcome to OffTheGrid CLI Chat!'));
@@ -17,7 +17,7 @@ async function main() {
         socketProvider.connect(SERVER_URL);
         console.log(chalk.gray(`Connected to socket server at ${SERVER_URL}...`));
 
-        socketProvider.socket.on('error', (err) => {
+        socketProvider.socket!.on('error', (err: any) => {
             // suppress global error spam, let handlers deal with it
         });
 
@@ -53,7 +53,7 @@ async function authFlow() {
 
     if (action.includes('2')) {
         console.log(chalk.gray('Registering...'));
-        socketProvider.socket.emit('register', { username, password });
+        socketProvider.socket!.emit('register', { username, password });
 
         const result = await waitForAuth('register_success');
         if (result.success) {
@@ -66,7 +66,7 @@ async function authFlow() {
 
     } else if (action.includes('1')) {
         console.log(chalk.gray('Logging in...'));
-        socketProvider.socket.emit('login', { username, password });
+        socketProvider.socket!.emit('login', { username, password });
 
         const result = await waitForAuth('login_success');
         if (result.success) {
@@ -83,14 +83,14 @@ async function authFlow() {
     }
 }
 
-function waitForAuth(successEvent) {
+function waitForAuth(successEvent: string): Promise<{ success: boolean; data?: any; message?: string }> {
     return new Promise((resolve) => {
-        const successHandler = (data) => {
+        const successHandler = (data: any) => {
             cleanup();
             resolve({ success: true, data });
         };
 
-        const errorHandler = (err) => {
+        const errorHandler = (err: any) => {
             cleanup();
             const msg = err.message || (typeof err === 'string' ? err : 'Unknown error');
             resolve({ success: false, message: msg });
@@ -103,12 +103,12 @@ function waitForAuth(successEvent) {
 
         const cleanup = () => {
             clearTimeout(timeout);
-            socketProvider.socket.off(successEvent, successHandler);
-            socketProvider.socket.off('error', errorHandler);
+            socketProvider.socket!.off(successEvent, successHandler);
+            socketProvider.socket!.off('error', errorHandler);
         };
 
-        socketProvider.socket.once(successEvent, successHandler);
-        socketProvider.socket.once('error', errorHandler);
+        socketProvider.socket!.once(successEvent, successHandler);
+        socketProvider.socket!.once('error', errorHandler);
     });
 }
 
@@ -158,26 +158,6 @@ async function chatSetupFlow() {
     }
 
     console.log(chalk.green(`✔ Chatting with: ${target}`));
-
-    // Fetch History
-    console.log(chalk.gray('Loading chat history...'));
-    socketProvider.socket.emit('get_chat_history', { contact: target });
-
-    await new Promise(resolve => {
-        socketProvider.socket.once('chat_history', (data) => {
-            if (data.contact.toLowerCase() === target.toLowerCase()) {
-                data.messages.forEach(msg => {
-                    const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    const displaySender = msg.sender_username === currentUser ? 'You' : msg.sender_username;
-                    const color = msg.sender_username === currentUser ? chalk.gray : chalk.cyan;
-                    console.log(color(`[${time}] [${displaySender}]: ${msg.content}`));
-                });
-            }
-            resolve();
-        });
-        setTimeout(resolve, 2000); // Timeout fallback
-    });
-
     console.log(chalk.gray('--- Chat Started (Type "exit" to leave) ---'));
 
     setupChatListeners(target);
@@ -187,19 +167,19 @@ async function chatSetupFlow() {
 async function inboxMenu() {
     console.log(chalk.blue.bold('\n--- Registered Users & Online Status ---'));
 
-    const userStatusPromise = new Promise(resolve => {
+    const userStatusPromise = new Promise<any[]>(resolve => {
         const timer = setTimeout(() => {
-            socketProvider.socket.off('all_users_status_data', handler);
+            socketProvider.socket!.off('all_users_status_data', handler);
             resolve([]);
         }, 3000);
-        const handler = (data) => {
+        const handler = (data: any) => {
             clearTimeout(timer);
             resolve(data || []);
         };
-        socketProvider.socket.once('all_users_status_data', handler);
+        socketProvider.socket!.once('all_users_status_data', handler);
     });
 
-    socketProvider.socket.emit('get_all_users_status');
+    socketProvider.socket!.emit('get_all_users_status');
 
     const usersStatus = await userStatusPromise;
 
@@ -243,37 +223,20 @@ async function inboxMenu() {
     }
 }
 
-async function chatSetupFlow_Direct(target) {
+async function chatSetupFlow_Direct(target: string) {
     console.log(chalk.green(`✔ Continuing chat with: ${target}`));
-
-    // Fetch History
-    socketProvider.socket.emit('get_chat_history', { contact: target });
-
-    await new Promise(resolve => {
-        socketProvider.socket.once('chat_history', (data) => {
-            if (data.contact.toLowerCase() === target.toLowerCase()) {
-                data.messages.forEach(msg => {
-                    const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    const displaySender = msg.sender_username === currentUser ? 'You' : msg.sender_username;
-                    const color = msg.sender_username === currentUser ? chalk.gray : chalk.cyan;
-                    console.log(color(`[${time}] [${displaySender}]: ${msg.content}`));
-                });
-            }
-            resolve();
-        });
-        setTimeout(resolve, 2000);
-    });
+    console.log(chalk.gray('--- Chat Started (Type "exit" to leave) ---'));
 
     setupChatListeners(target);
     await startChatLoop(target);
 }
 
-function setupChatListeners(recipient) {
-    socketProvider.socket.off('message');
-    socketProvider.socket.off('notification');
-    socketProvider.socket.off('user_status');
+function setupChatListeners(recipient: string) {
+    socketProvider.socket!.off('message');
+    socketProvider.socket!.off('notification');
+    socketProvider.socket!.off('user_status');
 
-    socketProvider.onMessage((data) => {
+    socketProvider.onMessage((data: any) => {
         const sender = data.from || 'Anonymous';
         const text = data.content;
         const time = data.timestamp ? new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now';
@@ -285,11 +248,11 @@ function setupChatListeners(recipient) {
         }
     });
 
-    socketProvider.socket.on('notification', (msg) => {
+    socketProvider.socket!.on('notification', (msg: any) => {
         console.log(chalk.yellow(`\n[Info]: ${msg}`));
     });
 
-    socketProvider.socket.on('user_status', (data) => {
+    socketProvider.socket!.on('user_status', (data: any) => {
         const { username, status } = data;
         if (username.toLowerCase() === recipient.toLowerCase()) {
             const color = status === 'online' ? chalk.green : chalk.red;
@@ -298,7 +261,7 @@ function setupChatListeners(recipient) {
     });
 }
 
-async function startChatLoop(recipient) {
+async function startChatLoop(recipient: string) {
     const { message } = await inquirer.prompt([{
         type: 'input',
         name: 'message',
@@ -307,7 +270,7 @@ async function startChatLoop(recipient) {
 
     if (message.trim().toLowerCase() === 'exit') {
         console.log(chalk.yellow('Ended chat.'));
-        socketProvider.socket.off('message');
+        socketProvider.socket!.off('message');
         await mainMenu();
         return;
     }

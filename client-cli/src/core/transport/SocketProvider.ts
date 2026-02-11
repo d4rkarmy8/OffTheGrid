@@ -1,11 +1,13 @@
-import { io } from "socket.io-client";
+import { io, Socket } from "socket.io-client";
 
 class SocketProvider {
+    socket: Socket | null;
+
     constructor() {
         this.socket = null;
     }
 
-    connect(url, token = null) {
+    connect(url: string, token: string | null = null) {
         this.socket = io(url, {
             auth: { token }
         });
@@ -14,26 +16,26 @@ class SocketProvider {
             // Connection logic handled in main index
         });
 
-        this.socket.on("connect_error", (err) => {
+        this.socket.on("connect_error", (err: Error) => {
             console.error("Connection error:", err.message);
         });
     }
 
-    setAuth(token) {
+    setAuth(token: string | null) {
         if (this.socket) {
             this.socket.auth = { token };
         }
     }
 
-    send(message) {
+    send(message: any) {
         if (this.socket) {
             this.socket.emit("message", message);
         }
     }
 
-    onMessage(callback) {
+    onMessage(callback: (data: any) => void) {
         if (this.socket) {
-            this.socket.on("message", (data) => {
+            this.socket.on("message", (data: any) => {
                 callback(data);
             });
         }
