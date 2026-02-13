@@ -16,28 +16,8 @@ const userSockets = new Map();
 //  ADDED EDGE CASE: Track last message time per user (basic rate limiting)
 const lastMessageTime = new Map();
 
-async function saveMessage(data:{ id: string; from: string; to: string; content: string; status?: string; timestamp: string }) {
-    try {
-        await supabase.from('messages').insert([{
-            id: data.id,
-            sender_username: data.from,
-            recipient_username: data.to,
-            content: data.content,
-            status: data.status || 'sent',
-            timestamp: data.timestamp
-        }]);
-    } catch (err: any) {
-        console.error("DB Save Error:", err.message);
-    }
-}
-
-async function updateMessageStatus(id: string, status: string) {
-    try {
-        await supabase.from('messages').update({ status }).eq('id', id);
-    } catch (err: any) {
-        console.error("DB Update Error:", err.message);
-    }
-}
+// Map to track public keys in memory: username -> public keys
+const userPublicKeys = new Map();
 
 const socketHandler = (io: any) => {
     // Middleware for JWT verification
@@ -66,10 +46,11 @@ const socketHandler = (io: any) => {
         }
 
         // REGISTER
-        socket.on('register', async ({ username, password }: { username: string; password: string }) => {
+        socket.on('register', async ({ id, username, password }: { id: string; username: string; password: string }) => {
             try {
                 const hashedPassword = await bcrypt.hash(password, 10);
                 const { data, error } = await supabase.from('users').insert([{
+                    id,
                     username,
                     password_hash: hashedPassword
                 }]).select().single();
@@ -105,7 +86,7 @@ const socketHandler = (io: any) => {
                 const normalizedUsername = user.username.trim().toLowerCase();
                 userSockets.set(normalizedUsername, socket.id);
 
-                socket.emit('login_success', { token, username: user.username });
+                socket.emit('login_success', { token, username: user.username, userId: user.id });
                 // Broadcast status
                 io.emit('user_status', { username: user.username, status: 'online' });
 
@@ -115,6 +96,51 @@ const socketHandler = (io: any) => {
             } catch (err: any) {
                 console.error(`[Login Error] ${err.message}`);
                 socket.emit('error', { message: 'Login failed' });
+            }
+        });
+
+        // UPLOAD PUBLIC KEYS
+        socket.on('upload_public_keys', async (payload: { userId?: string; username?: string; signingPublicKey?: string; encryptionPublicKey?: string; format?: string }) => {
+            const username = (socket.user?.username || payload.username || '').trim().toLowerCase();
+            const userId = (socket.user?.id || payload.userId || '').trim();
+
+            if (!userId) {
+                return socket.emit('error', { message: 'User id is required to upload keys' });
+            }
+
+            if (!payload.signingPublicKey || !payload.encryptionPublicKey) {
+                return socket.emit('error', { message: 'Both signing and encryption public keys are required' });
+            }
+
+            try {
+                const format = payload.format || 'der-base64';
+                const { error } = await supabase
+                    .from('publickeys')
+                    .upsert({
+                        id: userId,
+                        public_sign_key: payload.signingPublicKey,
+                        public_encrypt_key: payload.encryptionPublicKey,
+                        format,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+
+                if (error) {
+                    throw error;
+                }
+
+                if (username) {
+                    userPublicKeys.set(username, {
+                        signingPublicKey: payload.signingPublicKey,
+                        encryptionPublicKey: payload.encryptionPublicKey,
+                        format,
+                        updatedAt: new Date().toISOString()
+                    });
+                }
+
+                socket.emit('public_keys_uploaded', { userId, username: username || null });
+            } catch (err: any) {
+                console.error('Public Key Upload Error:', err.message || err);
+                socket.emit('error', { message: 'Failed to upload public keys' });
             }
         });
 
@@ -166,79 +192,16 @@ const socketHandler = (io: any) => {
 
             console.log(`[Message] Direct Message from ${data.from} to ${recipientUsername}`);
 
-            //  ADDED EDGE CASE: Prevent duplicate message IDs
-            const { data: existing } = await supabase
-                .from('messages')
-                .select('id')
-                .eq('id', data.id)
-                .single();
-
-            if (existing) return;
-
-            // Save to DB
-            saveMessage(data);
-
             const recipientSocketId = userSockets.get(recipientUsername);
 
             if (recipientSocketId) {
                 console.log(`[Routing] Delivering to socket: ${recipientSocketId}`);
                 io.to(recipientSocketId).emit('message', data);
-                updateMessageStatus(data.id, 'delivered');
             } else {
                 console.log(`[Routing] User "${recipientUsername}" is offline. Map contains: [${Array.from(userSockets.keys()).join(', ')}]`);
                 socket.emit('notification', `User ${data.to} is offline.`);
                 // Send explicit status update to sender if not found in map
                 socket.emit('user_status', { username: data.to, status: 'offline' });
-            }
-        });
-
-        // GET INBOX
-        socket.on('get_inbox', async () => {
-            if (!socket.user) return;
-            try {
-                const currentUser = socket.user.username;
-
-                // Get all messages involving this user
-                const { data: allMessages, error } = await supabase
-                    .from('messages')
-                    .select('sender_username, recipient_username, content, timestamp, status')
-                    .or(`sender_username.eq.${currentUser},recipient_username.eq.${currentUser}`)
-                    .order('timestamp', { ascending: false });
-
-                if (error) throw error;
-
-                // Process messages to create inbox
-                const conversations: { [key: string]: { contact: string; last_message_preview: string; last_timestamp: string; unread_count: number } } = {};
-
-                allMessages.forEach(msg => {
-                    const contact = msg.sender_username === currentUser
-                        ? msg.recipient_username
-                        : msg.sender_username;
-
-                    if (!conversations[contact]) {
-                        conversations[contact] = {
-                            contact: contact,
-                            last_message_preview: msg.content,
-                            last_timestamp: msg.timestamp,
-                            unread_count: 0
-                        };
-                    }
-
-                    // Count unread (messages sent TO current user that aren't read)
-                    if (msg.recipient_username === currentUser &&
-                        msg.status !== 'read') {
-                        conversations[contact].unread_count++;
-                    }
-                });
-
-                const inboxData = Object.values(conversations)
-                    .sort((a, b) => new Date(b.last_timestamp).getTime() - new Date(a.last_timestamp).getTime());
-
-                console.log(`[Inbox] Returning ${inboxData.length} conversations for ${currentUser}`);
-                socket.emit('inbox_data', inboxData);
-            } catch (err: any) {
-                console.error("Inbox Error:", err.message);
-                socket.emit('error', { message: 'Failed to fetch inbox' });
             }
         });
 
@@ -276,34 +239,6 @@ const socketHandler = (io: any) => {
 
             console.log(`[OnlineUsers] Requester: ${currentUser}, AllOnline: [${Array.from(userSockets.keys()).join(', ')}], Returning: [${onlineUsers.join(', ')}]`);
             socket.emit('online_users_data', onlineUsers);
-        });
-
-        // GET CHAT HISTORY
-        socket.on('get_chat_history', async ({ contact }: { contact: string }) => {
-            if (!socket.user) return;
-            try {
-                const { data, error } = await supabase
-                    .from('messages')
-                    .select('*')
-                    .or(`and(sender_username.eq.${socket.user.username},recipient_username.eq.${contact}),and(sender_username.eq.${contact},recipient_username.eq.${socket.user.username})`)
-                    .order('timestamp', { ascending: true })
-                    .limit(50);
-
-                if (error) throw error;
-                socket.emit('chat_history', { contact, messages: data });
-
-                // Mark messages as read
-                await supabase
-                    .from('messages')
-                    .update({ status: 'read' })
-                    .eq('recipient_username', socket.user.username)
-                    .eq('sender_username', contact)
-                    .eq('status', 'pending');
-
-            } catch (err: any) {
-                console.error("History Error:", err.message);
-                socket.emit('error', { message: 'Failed to fetch history' });
-            }
         });
 
         socket.on('disconnect', () => {
