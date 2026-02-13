@@ -22,6 +22,22 @@ const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
+
+    // Check Supabase connection
+    void (async () => {
+        try {
+            const { default: supabase } = await import('./config/supabase.js');
+            const { error } = await supabase.from('users').select('count', { count: 'exact', head: true });
+
+            if (error) {
+                console.error('❌ Supabase connection failed:', error.message);
+            } else {
+                console.log('✅ Connected to Supabase');
+            }
+        } catch (err: any) {
+            console.error('❌ Supabase connection error:', err);
+        }
+    })();
 });
 
 export default server;
