@@ -20,6 +20,10 @@ class SocketProvider {
         this.socket.on("connect", () => {
             // Connection logic handled in main index
         });
+
+        this.socket.on("connect_error", (err: Error) => {
+            console.error("Connection error:", err.message);
+        });
     }
 
     setAuth(token: string | null) {

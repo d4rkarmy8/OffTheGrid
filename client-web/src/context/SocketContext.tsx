@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import type { ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
+import { generateAndStoreKeys, type PublicKeys } from '../../crypto/keyManagerBrowser';
 
 interface User {
     id: string;
@@ -155,18 +156,61 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }, []);
 
     const login = useCallback((username: string, password: string) => {
-        return new Promise<void>((resolve, reject) => {
+        return new Promise<void>(async (resolve, reject) => {
             if (!socket) return reject('No socket connection');
 
             socket.emit('login', { username, password });
 
-            const onSuccess = (data: { token: string; username: string }) => {
-                localStorage.setItem('mesez_token', data.token);
-                localStorage.setItem('mesez_username', data.username);
-                socket.auth = { token: data.token };
-                setUser({ id: 'loggedin', username: data.username });
-                resolve();
-                cleanup();
+            const onSuccess = async (data: { token: string; username: string }) => {
+                try {
+                    localStorage.setItem('mesez_token', data.token);
+                    localStorage.setItem('mesez_username', data.username);
+                    socket.auth = { token: data.token };
+                    setUser({ id: 'loggedin', username: data.username });
+
+                    // Check if user has keys on the server
+                    const hasKeys = await new Promise<boolean>((resolveKeys) => {
+                        socket.emit('check_public_keys', { username: data.username });
+
+                        const onKeysCheck = (response: { exists: boolean }) => {
+                            socket.off('public_keys_check_response', onKeysCheck);
+                            resolveKeys(response.exists);
+                        };
+
+                        // Timeout if no response
+                        const timeout = setTimeout(() => {
+                            socket.off('public_keys_check_response', onKeysCheck);
+                            resolveKeys(false); // Assume no keys if no response
+                        }, 3000);
+
+                        socket.on('public_keys_check_response', (response) => {
+                            clearTimeout(timeout);
+                            onKeysCheck(response);
+                        });
+                    });
+
+                    // If no keys exist, generate and upload new ones
+                    if (!hasKeys) {
+                        try {
+                            const publicKeys = await generateAndStoreKeys(data.username);
+                            socket.emit('upload_public_keys', {
+                                username: data.username,
+                                signingPublicKey: publicKeys.signingPublicKey,
+                                encryptionPublicKey: publicKeys.encryptionPublicKey,
+                                format: publicKeys.format,
+                            });
+                        } catch (err) {
+                            console.error('Error generating keys on login:', err);
+                            // Don't reject login if key generation fails, just log it
+                        }
+                    }
+
+                    resolve();
+                } catch (err) {
+                    reject(err instanceof Error ? err.message : 'Login process failed');
+                } finally {
+                    cleanup();
+                }
             };
 
             const onError = (err: any) => {
@@ -185,14 +229,32 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }, [socket]);
 
     const register = useCallback((username: string, password: string) => {
-        return new Promise<void>((resolve, reject) => {
+        return new Promise<void>(async (resolve, reject) => {
             if (!socket) return reject('No socket connection');
+            const id=uuidv4();
+            socket.emit('register', { id, username, password });
 
-            socket.emit('register', { username, password });
-
-            const onSuccess = () => {
-                resolve();
-                cleanup();
+            const onSuccess = async () => {
+                try {
+                    // Generate and store keys for the new user
+                    const publicKeys = await generateAndStoreKeys(username);
+                    
+                    // Send public keys to server to store in database
+                    socket.emit('upload_public_keys', {
+                        userId: id,
+                        username,
+                        signingPublicKey: publicKeys.signingPublicKey,
+                        encryptionPublicKey: publicKeys.encryptionPublicKey,
+                        format: publicKeys.format,
+                    });
+                    
+                    resolve();
+                } catch (err) {
+                    console.error('Error generating and uploading keys:', err);
+                    reject(err instanceof Error ? err.message : 'Failed to generate keys');
+                } finally {
+                    cleanup();
+                }
             };
 
             const onError = (err: any) => {

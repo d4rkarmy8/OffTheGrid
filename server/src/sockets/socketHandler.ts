@@ -144,6 +144,34 @@ const socketHandler = (io: any) => {
             }
         });
 
+        // CHECK IF USER HAS PUBLIC KEYS
+        socket.on('check_public_keys', async (payload: { username?: string }) => {
+            const username = (socket.user?.username || payload.username || '').trim().toLowerCase();
+            const userId = socket.user?.id;
+
+            if (!userId) {
+                return socket.emit('error', { message: 'User id is required to check keys' });
+            }
+
+            try {
+                const { data, error } = await supabase
+                    .from('publickeys')
+                    .select('id')
+                    .eq('id', userId)
+                    .single();
+
+                if (error && error.code !== 'PGRST116') {
+                    throw error;
+                }
+
+                const exists = !!data;
+                socket.emit('public_keys_check_response', { exists, username: username || null });
+            } catch (err: any) {
+                console.error('Public Keys Check Error:', err.message || err);
+                socket.emit('public_keys_check_response', { exists: false, username: username || null });
+            }
+        });
+
         // MESSAGE (Direct Routing)
         socket.on('message', async (data: { id: string; from: string; to: string; content: string; status?: string; timestamp: string }) => {
             if (!socket.user) return socket.emit('error', { message: 'Unauthorized' });
