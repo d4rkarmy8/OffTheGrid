@@ -189,6 +189,27 @@ async function chatSetupFlow() {
     }
 
     console.log(chalk.green(`✔ Chatting with: ${target}`));
+    console.log(chalk.gray('--- Loading Chat History... ---'));
+
+    // Fetch history
+    socketProvider.socket!.emit('get_chat_history', { contact: target });
+
+    // We need to wait for 'chat_history' event and print it
+    const history = await new Promise<any[]>((resolve) => {
+        socketProvider.socket!.once('chat_history', (data: any) => {
+            resolve(data.messages || []);
+        });
+        setTimeout(() => resolve([]), 2000); // fallback
+    });
+
+    history.forEach(msg => {
+        const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const isMe = msg.from === currentUser;
+        const color = isMe ? chalk.gray : chalk.cyan;
+        const name = isMe ? 'You' : msg.from;
+        console.log(color(`[${time}] [${name}]: ${msg.content}`));
+    });
+
     console.log(chalk.gray('--- Chat Started (Type "exit" to leave) ---'));
 
     setupChatListeners(target);

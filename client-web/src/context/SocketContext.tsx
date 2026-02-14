@@ -39,6 +39,7 @@ interface SocketContextType {
     loadInbox: () => void;
     loadChatHistory: (contact: string) => void;
     onlineUsers: string[];
+    allContacts: string[];
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -72,6 +73,7 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const [messages, setMessages] = useState<Message[]>([]);
     const [inbox, setInbox] = useState<InboxItem[]>([]);
     const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+    const [allContacts, setAllContacts] = useState<string[]>([]);
 
     const loadInbox = useCallback(() => {
         if (socket) socket.emit('get_inbox');
@@ -91,6 +93,7 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         newSocket.on('connect', () => {
             setIsConnected(true);
             console.log('✅ Connected to server');
+            newSocket.emit('get_online_users'); // Fetch online and all contacts
         });
 
         newSocket.on('disconnect', () => {
@@ -125,6 +128,10 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             setOnlineUsers(data);
         });
 
+        newSocket.on('all_contacts_data', (data: string[]) => {
+            setAllContacts(data);
+        });
+
         newSocket.on('user_status', (_data: { username: string; status: string }) => {
             // Refresh online users when someone's status changes
             newSocket.emit('get_online_users');
@@ -150,6 +157,7 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             newSocket.off('chat_history');
             newSocket.off('inbox_data');
             newSocket.off('online_users_data');
+            newSocket.off('all_contacts_data');
             newSocket.off('user_status');
             newSocket.close();
         };
@@ -279,6 +287,7 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setMessages([]);
         setInbox([]);
         setOnlineUsers([]);
+        setAllContacts([]);
         if (socket) {
             socket.auth = {};
             socket.disconnect();
@@ -318,6 +327,7 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
                 loadInbox,
                 loadChatHistory,
                 onlineUsers,
+                allContacts,
             }}
         >
             {children}
