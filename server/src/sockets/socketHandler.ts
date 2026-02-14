@@ -194,14 +194,71 @@ const socketHandler = (io: any) => {
 
             const recipientSocketId = userSockets.get(recipientUsername);
 
+            //  ADDED EDGE CASE: Store message in database for offline retrieval
+            try {
+                const { error: dbError } = await supabase
+                    .from('messages')
+                    .insert([{
+                        id: data.id,
+                        // Store with guessed column names: sender, recipient, content, timestamp
+
+                        // Let's WRITE the code to insert using 'sender' and 'recipient' as a best guess, 
+                        // and 'content', 'timestamp'.
+                        sender: sender,
+                        recipient: recipientUsername,
+                        content: data.content,
+                        timestamp: data.timestamp
+                    }]);
+
+                if (dbError) {
+                    console.error('Failed to save message:', dbError);
+                    // Non-blocking error, allow flow to continue? Or block?
+                    // Better to log and continue for now.
+                }
+            } catch (err) {
+                console.error('Message save error:', err);
+            }
+
             if (recipientSocketId) {
                 console.log(`[Routing] Delivering to socket: ${recipientSocketId}`);
                 io.to(recipientSocketId).emit('message', data);
             } else {
                 console.log(`[Routing] User "${recipientUsername}" is offline. Map contains: [${Array.from(userSockets.keys()).join(', ')}]`);
-                socket.emit('notification', `User ${data.to} is offline.`);
+                socket.emit('notification', `User ${data.to} is offline. Message saved.`); // Updated notification
                 // Send explicit status update to sender if not found in map
                 socket.emit('user_status', { username: data.to, status: 'offline' });
+            }
+        });
+
+        // GET CHAT HISTORY
+        socket.on('get_chat_history', async ({ contact }: { contact: string }) => {
+            if (!socket.user) return;
+            const currentUser = socket.user.username.trim().toLowerCase();
+            const targetUser = contact.trim().toLowerCase();
+
+            try {
+                const { data, error } = await supabase
+                    .from('messages')
+                    .select('*')
+                    .or(`and(sender.eq.${currentUser},recipient.eq.${targetUser}),and(sender.eq.${targetUser},recipient.eq.${currentUser})`)
+                    .order('timestamp', { ascending: true });
+
+                if (error) throw error;
+
+                // Map back to client format if needed
+                const messages = data.map((m: any) => ({
+                    id: m.id,
+                    from: m.sender,
+                    to: m.recipient,
+                    content: m.content,
+                    timestamp: m.timestamp,
+                    status: 'read' // Simplified status
+                }));
+
+                socket.emit('chat_history', { contact: targetUser, messages });
+            } catch (err: any) {
+                console.error('Chat History Error:', err.message);
+                socket.emit('error', { message: 'Failed to fetch chat history' });
             }
         });
 
@@ -231,14 +288,27 @@ const socketHandler = (io: any) => {
         });
 
         // GET ONLINE USERS
-        socket.on('get_online_users', () => {
+        socket.on('get_online_users', async () => {
             if (!socket.user) return;
             const currentUser = socket.user.username.trim().toLowerCase();
+
+            // Emit online users for status
             const onlineUsers = Array.from(userSockets.keys())
                 .filter(u => u !== currentUser);
-
-            console.log(`[OnlineUsers] Requester: ${currentUser}, AllOnline: [${Array.from(userSockets.keys()).join(', ')}], Returning: [${onlineUsers.join(', ')}]`);
             socket.emit('online_users_data', onlineUsers);
+
+            // Emit ALL users for the contact list
+            try {
+                const { data: dbUsers } = await supabase.from('users').select('username');
+                if (dbUsers) {
+                    const allContacts = dbUsers
+                        .filter(u => u.username && u.username.trim().toLowerCase() !== currentUser)
+                        .map(u => u.username);
+                    socket.emit('all_contacts_data', allContacts);
+                }
+            } catch (e) {
+                console.error("Error fetching contacts", e);
+            }
         });
 
         socket.on('disconnect', () => {

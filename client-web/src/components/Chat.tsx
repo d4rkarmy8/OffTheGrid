@@ -4,7 +4,7 @@ import { Send, LogOut, User as UserIcon, MessageSquare, Plus, X, Search } from '
 import { format } from 'date-fns';
 
 export const Chat: React.FC = () => {
-    const { user, messages, sendMessage, logout, loadInbox, loadChatHistory, inbox, onlineUsers } = useSocket();
+    const { user, messages, sendMessage, logout, loadInbox, loadChatHistory, inbox, onlineUsers, allContacts } = useSocket();
     const [input, setInput] = useState('');
     const [activeContact, setActiveContact] = useState<string | null>(null);
     const [showNewChat, setShowNewChat] = useState(false);
@@ -97,6 +97,11 @@ export const Chat: React.FC = () => {
 
                 {/* Conversation list */}
                 <div className="flex-1 overflow-y-auto">
+                    {filteredInbox.length > 0 && (
+                        <div className="px-4 py-2 text-xs font-semibold text-surface-200/50 uppercase tracking-wider">
+                            Conversations
+                        </div>
+                    )}
                     {filteredInbox.map((conv, i) => (
                         <div
                             key={conv.contact}
@@ -136,12 +141,54 @@ export const Chat: React.FC = () => {
                         </div>
                     ))}
 
-                    {filteredInbox.length === 0 && (
+                    {/* All Registered Users Section */}
+                    {allContacts.filter(u => !inbox.some(c => c.contact === u) && u.toLowerCase().includes(searchQuery.toLowerCase())).length > 0 && (
+                        <div className="mt-4">
+                            <div className="px-4 py-2 text-xs font-semibold text-surface-200/50 uppercase tracking-wider">
+                                Registered Users
+                            </div>
+                            {allContacts
+                                .filter(u => !inbox.some(c => c.contact === u) && u.toLowerCase().includes(searchQuery.toLowerCase()))
+                                .map((username, i) => {
+                                    const isOnline = isContactOnline(username);
+                                    return (
+                                        <div
+                                            key={username}
+                                            onClick={() => setActiveContact(username)}
+                                            className={`p-3.5 mx-2 my-0.5 rounded-xl cursor-pointer transition-all duration-200 animate-fade-in ${activeContact === username
+                                                ? 'bg-primary-600/15 border border-primary-500/20'
+                                                : 'hover:bg-white/4 border border-transparent'
+                                                }`}
+                                            style={{ animationDelay: `${i * 50}ms` }}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="relative flex-shrink-0">
+                                                    <div className="w-10 h-10 bg-surface-700 rounded-xl flex items-center justify-center">
+                                                        <UserIcon size={18} className="text-surface-200/50" />
+                                                    </div>
+                                                    <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface-900 ${isOnline ? 'bg-green-500' : 'bg-surface-200/30'}`} />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="font-medium text-sm text-surface-100">{username}</span>
+                                                    </div>
+                                                    <p className={`text-xs truncate ${isOnline ? 'text-green-400/70' : 'text-surface-200/30'}`}>
+                                                        {isOnline ? 'Online now' : 'Offline'}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                        </div>
+                    )}
+
+                    {filteredInbox.length === 0 && allContacts.filter(u => !inbox.some(c => c.contact === u) && u.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
                         <div className="p-8 text-center">
                             <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center mx-auto mb-3">
                                 <MessageSquare size={20} className="text-surface-200/30" />
                             </div>
-                            <p className="text-surface-200/40 text-sm">No conversations yet</p>
+                            <p className="text-surface-200/40 text-sm">No conversations found</p>
                             <p className="text-surface-200/25 text-xs mt-1">Start a new chat!</p>
                         </div>
                     )}
